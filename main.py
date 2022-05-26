@@ -11,13 +11,14 @@ import constant
 from web3 import Web3
 from telebot.async_telebot import AsyncTeleBot
 from web3.middleware import geth_poa_middleware
-from telebot import types, TeleBot
+from telebot.asyncio_filters import TextMatchFilter, TextFilter, IsReplyFilter
+from telebot import types
 
 API_TOKEN = '5142526572:AAEpRiuZ7tQV5ma6Lv0HyBFy8seSfj8V7Ww'
 bot = AsyncTeleBot(API_TOKEN)
 
 
-@bot.message_handler()
+@bot.message_handler(text=TextFilter(starts_with="0x", ignore_case=True))
 async def products_command_handler(message: types.Message):
     addr = message.text.split(" ")[-1]
     try:
@@ -48,6 +49,8 @@ BNB现价: ${result["bnb_price"]}
 
 
 def run():
+    bot.add_custom_filter(TextMatchFilter())
+    bot.add_custom_filter(IsReplyFilter())
     asyncio.run(bot.polling())
 
 
