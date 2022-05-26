@@ -2,6 +2,8 @@
 import asyncio
 import json
 import math
+import time
+
 import requests
 import constant
 from web3 import Web3
@@ -18,7 +20,10 @@ async def products_command_handler(message: types.Message):
     addr = message.text.split(" ")[-1]
     try:
         st = SearchToken()
+        start_time = time.time()
         result = await st.search(addr)
+        end_time = time.time()
+        print(end_time - start_time)
         text = f"""
 合约：{addr}
 名字：{result["name"]}
@@ -31,7 +36,8 @@ async def products_command_handler(message: types.Message):
 池子流动性：{result["liquidity"]} {"BNB" if result["is_bnb"] else "USDT"}
 BNB现价: ${result["bnb_price"]}
         """
-    except:
+    except Exception as e:
+        print(e)
         text = "contract address error"
 
     await bot.reply_to(message, text=text)
@@ -117,8 +123,10 @@ class SearchToken:
             except:
                 owner = "0x000000000000000000000000000000000000dead"
 
-        usdt_pair = await self.get_pair(token, self.bsc_usdt)
-        bnb_pair = await self.get_pair(token, self.bsc_wbnb)
+        # 异步查询usdt和bnb pair
+        res = await asyncio.gather(self.get_pair(token, self.bsc_usdt), self.get_pair(token, self.bsc_wbnb))
+        usdt_pair = res[0]
+        bnb_pair = res[1]
 
         usdt_pair_balance = contract.functions.balanceOf(usdt_pair).call()
         bnb_pair_balance = contract.functions.balanceOf(bnb_pair).call()
@@ -130,11 +138,12 @@ class SearchToken:
             pair = bnb_pair
             is_bnb = True
 
-        # 查询bnb最新价格
-        bnb_price = await self.get_bnb_price()
+        # 异步查询bnb最新价格和token0、token1储备量
+        res = await asyncio.gather(self.get_bnb_price(), self.get_reserves(pair))
 
-        # 获取token0和token1储备量
-        reserve0, reserve1, token0 = await self.get_reserves(pair)
+        bnb_price = res[0]
+
+        reserve0, reserve1, token0 = res[1]
 
         # 查询name
         name = contract.functions.name().call()
