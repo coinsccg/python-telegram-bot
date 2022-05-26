@@ -5,6 +5,8 @@ import math
 import time
 
 import requests
+import web3.eth
+
 import constant
 from web3 import Web3
 from telebot.async_telebot import AsyncTeleBot
@@ -15,7 +17,7 @@ API_TOKEN = '5142526572:AAEpRiuZ7tQV5ma6Lv0HyBFy8seSfj8V7Ww'
 bot = AsyncTeleBot(API_TOKEN)
 
 
-@bot.message_handler(commands=['bsc'])
+@bot.message_handler()
 async def products_command_handler(message: types.Message):
     addr = message.text.split(" ")[-1]
     try:
@@ -31,14 +33,15 @@ async def products_command_handler(message: types.Message):
 精度：{result["decimals"]}
 总供应量：{result["total_supply"]}
 价格：{result["price"]}/{"BNB" if result["is_bnb"] else "USDT"}
-合约所有者：{result["owner"]}
+所有权：{result["owner"]}
 {"BNB" if result["is_bnb"] else "USDT"}池地址：{result["pair"]}
 池子流动性：{result["liquidity"]} {"BNB" if result["is_bnb"] else "USDT"}
 BNB现价: ${result["bnb_price"]}
+增发开关：{"有" if result["is_mint"] else "无"}    销毁占比：{result["burn_rate"]}%
         """
     except Exception as e:
         print(e)
-        text = "contract address error"
+        text = "😕 contract address error"
 
     await bot.reply_to(message, text=text)
 
@@ -52,6 +55,7 @@ class SearchToken:
     eth_rpc = "https://kovan.infura.io/v3/457c1ac43c544b05abfef0163084a7a6"
     bsc_usdt = "0x55d398326f99059fF775485246999027B3197955"
     bsc_wbnb = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+    null_address = "0x000000000000000000000000000000000000dEaD"
     pancakeswap_factory = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73"
 
     def __init__(self):
@@ -96,11 +100,36 @@ class SearchToken:
         resp = requests.get(url=constant.BSC_BNB_LAST_PRICE_API)
         return resp.json()["result"]["ethusd"]
 
+    @staticmethod
+    async def get_name(contract: web3.eth.Contract) -> str:
+        return contract.functions.name().call()
+
+    @staticmethod
+    async def get_symbol(contract: web3.eth.Contract) -> str:
+        return contract.functions.symbol().call()
+
+    @staticmethod
+    async def get_decimals(contract: web3.eth.Contract) -> int:
+        return contract.functions.decimals().call()
+
+    @staticmethod
+    async def get_total_supply(contract: web3.eth.Contract) -> int:
+        return contract.functions.totalSupply().call()
+
+    @staticmethod
+    async def get_balance_of(contract: web3.eth.Contract, address: str) -> int:
+        return contract.functions.balanceOf(address).call()
+
     async def search(self, token: str) -> dict:
         if not Web3.isAddress(token):
             raise Exception("address error")
         # 查询abi
-        _, proxy_contract = await self.get_source_code(token)
+        source, proxy_contract = await self.get_source_code(token)
+
+        is_mint = False
+        if str(source).find("function mint", 0, -1) > -1:
+            is_mint = True
+
         abi: str
         if len(proxy_contract) > 0:
             abi = await self.get_contract_abi(proxy_contract)
@@ -145,17 +174,10 @@ class SearchToken:
 
         reserve0, reserve1, token0 = res[1]
 
-        # 查询name
-        name = contract.functions.name().call()
-
-        # 查询symbol
-        symbol = contract.functions.symbol().call()
-
-        # 查询token1精度
-        decimals = contract.functions.decimals().call()
-
-        # 查询总供应量
-        total_supply = contract.functions.totalSupply().call()
+        # 异步查询name、symbol、decimals、total_supply、burn
+        res = await asyncio.gather(self.get_name(contract), self.get_symbol(contract), self.get_decimals(contract),
+                                   self.get_total_supply(contract), self.get_balance_of(contract, self.null_address))
+        name, symbol, decimals, total_supply, burn_amount = res[0], res[1], res[2], res[3], res[4]
 
         if Web3.toChecksumAddress(token) == Web3.toChecksumAddress(token0):
             liquidity = float(Web3.fromWei(reserve1, "ether"))
@@ -170,15 +192,15 @@ class SearchToken:
             "owner": owner,
             "pair": pair,
             "price": price,
-            "total_supply": round(total_supply / math.pow(10, decimals), 6),
+            "total_supply": round(total_supply / math.pow(10, decimals)),
             "bnb_price": bnb_price,
             "liquidity": liquidity,
-            "is_bnb": is_bnb
+            "is_bnb": is_bnb,
+            "is_mint": is_mint,
+            "burn_rate": round(burn_amount * 100 / total_supply, 4)
         }
 
 
 if __name__ == '__main__':
     print("telegram bot running...")
     run()
-
-
