@@ -32,11 +32,12 @@ async def products_command_handler(message: types.Message):
 符号：{result["symbol"]}
 精度：{result["decimals"]}
 总供应量：{result["total_supply"]}
-价格：{result["price"]}/{"BNB" if result["is_bnb"] else "USDT"}
+价格：{result["price"]}{" BNB" if result["is_bnb"] else " USDT"}
 所有权：{result["owner"]}
 {"BNB" if result["is_bnb"] else "USDT"}池地址：{result["pair"]}
 池子流动性：{result["liquidity"]} {"BNB" if result["is_bnb"] else "USDT"}
 BNB现价: ${result["bnb_price"]}
+买gas: {result["buy"]} BNB    卖gas: {result["sell"]} BNB
 增发开关：{"有" if result["is_mint"] else "无"}    销毁占比：{result["burn_rate"]}%
         """
     except Exception as e:
@@ -120,6 +121,39 @@ class SearchToken:
     async def get_balance_of(contract: web3.eth.Contract, address: str) -> int:
         return contract.functions.balanceOf(address).call()
 
+    @staticmethod
+    async def get_erc20_transfer_gas(contract: str, address: str) -> (int, int):
+
+        buy: int = 0
+        sell: int = 0
+        n = 1
+        while True:
+            resp = requests.get(url=constant.BSC_ERC20_TRANSFER_API.format(contract, address, n))
+            result = resp.json()["result"]
+            for i in result:
+                # 卖
+                if Web3.toChecksumAddress(i["to"]) == Web3.toChecksumAddress(address):
+                    gas_price = resp.json()["result"][0]["gasPrice"]
+                    gas_used = resp.json()["result"][0]["gasUsed"]
+                    sell = int(gas_price) * int(gas_used)
+                # 卖
+                if Web3.toChecksumAddress(i["from"]) == Web3.toChecksumAddress(address):
+                    gas_price = resp.json()["result"][0]["gasPrice"]
+                    gas_used = resp.json()["result"][0]["gasUsed"]
+                    buy = int(gas_price) * int(gas_used)
+
+                if buy > 0 and sell > 0:
+                    break
+
+            if buy > 0 and sell > 0:
+                break
+
+            if len(result) < 10:
+                break
+            n += 1
+
+        return buy, sell
+
     async def search(self, token: str) -> dict:
         if not Web3.isAddress(token):
             raise Exception("address error")
@@ -150,7 +184,7 @@ class SearchToken:
             try:
                 owner = contract.functions.getOwner().call()
             except:
-                owner = "0x000000000000000000000000000000000000dead"
+                owner = "0x000000000000000000000000000000000000dEaD"
 
         # 异步查询usdt和bnb pair
         res = await asyncio.gather(self.get_pair(token, self.bsc_usdt), self.get_pair(token, self.bsc_wbnb))
@@ -168,11 +202,13 @@ class SearchToken:
             is_bnb = True
 
         # 异步查询bnb最新价格和token0、token1储备量
-        res = await asyncio.gather(self.get_bnb_price(), self.get_reserves(pair))
+        res = await asyncio.gather(self.get_bnb_price(), self.get_reserves(pair), self.get_erc20_transfer_gas(token, pair))
 
         bnb_price = res[0]
 
         reserve0, reserve1, token0 = res[1]
+
+        buy, sell = res[2]
 
         # 异步查询name、symbol、decimals、total_supply、burn
         res = await asyncio.gather(self.get_name(contract), self.get_symbol(contract), self.get_decimals(contract),
@@ -191,13 +227,15 @@ class SearchToken:
             "decimals": decimals,
             "owner": owner,
             "pair": pair,
-            "price": price,
+            "price": round(price, 6),
             "total_supply": round(total_supply / math.pow(10, decimals)),
             "bnb_price": bnb_price,
-            "liquidity": liquidity,
+            "liquidity": round(liquidity, 2),
             "is_bnb": is_bnb,
             "is_mint": is_mint,
-            "burn_rate": round(burn_amount * 100 / total_supply, 4)
+            "burn_rate": round(burn_amount * 100 / total_supply, 4),
+            "sell": round(Web3.fromWei(sell, "ether"), 6),
+            "buy": round(Web3.fromWei(buy, "ether"), 6)
         }
 
 
